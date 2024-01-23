@@ -10,6 +10,7 @@ import (
 	"github.com/Dreamacro/clash/common/pool"
 	"github.com/Dreamacro/clash/component/nat"
 	"github.com/Dreamacro/clash/component/resolver"
+	"github.com/Dreamacro/clash/config"
 	C "github.com/Dreamacro/clash/constant"
 	"github.com/Dreamacro/clash/constant/provider"
 	icontext "github.com/Dreamacro/clash/context"
@@ -46,6 +47,14 @@ var (
 
 func main() {
 	fmt.Println("hello")
+
+	buf, _ := os.ReadFile("./data/config.yaml")
+	rawCfg, err := config.UnmarshalRawConfig(buf)
+	if err != nil {
+		return
+	}
+	fmt.Println("rawCfg:", rawCfg)
+
 	ports := listener.Ports{
 		MixedPort: 7451,
 	}

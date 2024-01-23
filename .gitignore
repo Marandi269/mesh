@@ -56,5 +56,6 @@ Temporary Items
 ### macOS Patch ###
 # iCloud generated files
 *.icloud
-
+data/
+.idea
 # End of https://www.toptal.com/developers/gitignore/api/macos,go
