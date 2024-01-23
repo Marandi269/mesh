@@ -16,6 +16,7 @@ import (
 	"github.com/Dreamacro/clash/listener"
 	"github.com/Dreamacro/clash/log"
 	"github.com/Dreamacro/clash/tunnel/statistic"
+	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"go.uber.org/atomic"
 	"net"
 	"net/netip"
@@ -44,7 +45,6 @@ var (
 )
 
 func main() {
-	go DnsServe()
 	fmt.Println("hello")
 	ports := listener.Ports{
 		MixedPort: 7451,
@@ -52,10 +52,30 @@ func main() {
 	listener.SetAllowLan(true)
 	listener.ReCreatePortsListeners(ports, tcpQueue, udpQueue)
 	listener.PatchTunnel(nil, tcpQueue, udpQueue)
-	mapping := map[string]any{}
+	mapping := map[string]any{
+		"name":             "x1.0 美西 - 中转5",
+		"type":             "trojan",
+		"server":           "7c610710-i.2nvx.com",
+		"port":             10246,
+		"password":         "rnjranyA",
+		"udp":              true,
+		"sni":              "7c610710-i.2nvx.com",
+		"skip-cert-verify": false,
+	}
 	proxy, _ := adapter.ParseProxy(mapping)
 	proxies["GLOBAL"] = proxy
 	go process()
+
+	key := new(engine.Key)
+	key.Device = "utun15"
+	key.Proxy = "socks5://127.0.0.1:7451"
+	key.LogLevel = "info"
+	key.Interface = "en0"
+
+	engine.Insert(key)
+
+	engine.Start()
+	defer engine.Stop()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
