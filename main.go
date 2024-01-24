@@ -55,6 +55,12 @@ func main() {
 	}
 	fmt.Println("rawCfg:", rawCfg)
 
+	ps := make([]C.Proxy, 0, len(rawCfg.Proxy))
+	for _, mapping := range rawCfg.Proxy {
+		proxy, _ := adapter.ParseProxy(mapping)
+		ps = append(ps, proxy)
+	}
+	fmt.Println("ps:", ps)
 	ports := listener.Ports{
 		MixedPort: 7451,
 	}
