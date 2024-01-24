@@ -17,6 +17,7 @@ import (
 	"github.com/Dreamacro/clash/listener"
 	"github.com/Dreamacro/clash/log"
 	"github.com/Dreamacro/clash/tunnel/statistic"
+	"github.com/vishvananda/netlink"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"go.uber.org/atomic"
 	"net"
@@ -45,28 +46,68 @@ var (
 	UDPFallbackMatch = atomic.NewBool(false)
 )
 
-func main() {
-	fmt.Println("hello")
+func lookupIP(address string) ([]net.IP, error) {
+	allIPs, err := net.LookupIP(address)
+	if err != nil {
+		return nil, err
+	}
 
+	var ipv4IPs []net.IP
+	for _, ip := range allIPs {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			ipv4IPs = append(ipv4IPs, ipv4)
+		}
+	}
+
+	return ipv4IPs, nil
+}
+
+func getGateway() *netlink.Route {
+	// 获取路由表
+	routes, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+	if err != nil {
+		fmt.Println("Failed to get routes:", err)
+		return nil
+	}
+
+	// 遍历路由，寻找默认路由
+	for _, route := range routes {
+		// 默认路由的目的地地址为 nil
+		if route.Dst == nil {
+			return &route
+		}
+	}
+	return nil
+}
+
+func addRoute(ip net.IP, gateway net.IP) *netlink.Route {
+	route := &netlink.Route{
+		Dst: &net.IPNet{
+			IP:   ip,
+			Mask: net.CIDRMask(32, 32),
+		},
+		Gw: gateway,
+	}
+	err := netlink.RouteAdd(route)
+	if err != nil {
+		fmt.Println("RouteAdd error:", err)
+	}
+	return route
+}
+
+func main() {
 	buf, _ := os.ReadFile("./data/config.yaml")
 	rawCfg, err := config.UnmarshalRawConfig(buf)
 	if err != nil {
 		return
 	}
-	fmt.Println("rawCfg:", rawCfg)
 
-	ps := make([]C.Proxy, 0, len(rawCfg.Proxy))
-	for _, mapping := range rawCfg.Proxy {
-		proxy, _ := adapter.ParseProxy(mapping)
-		ps = append(ps, proxy)
-	}
-	fmt.Println("ps:", ps)
 	ports := listener.Ports{
 		MixedPort: 7451,
 	}
 	listener.SetAllowLan(true)
 	listener.ReCreatePortsListeners(ports, tcpQueue, udpQueue)
-	listener.PatchTunnel(nil, tcpQueue, udpQueue)
+	//listener.PatchTunnel(nil, tcpQueue, udpQueue)
 	mapping := map[string]any{
 		"name":             "x1.0 美西 - 中转5",
 		"type":             "trojan",
@@ -85,16 +126,99 @@ func main() {
 	key.Device = "utun15"
 	key.Proxy = "socks5://127.0.0.1:7451"
 	key.LogLevel = "info"
-	key.Interface = "en0"
+	key.Interface = "enp0s1"
 
 	engine.Insert(key)
 
 	engine.Start()
 	defer engine.Stop()
+	setIp()
+
+	gateway := getGateway()
+	fmt.Println("gateway:", gateway)
+
+	proxyIps := map[string][]net.IP{}
+
+	ps := make([]C.Proxy, 0, len(rawCfg.Proxy))
+	for _, mapping := range rawCfg.Proxy {
+		proxy, _ := adapter.ParseProxy(mapping)
+		server, _ := mapping["server"].(string)
+		ips, _ := lookupIP(server)
+		proxyIps[server] = ips
+		ps = append(ps, proxy)
+	}
+
+	tunGateway := net.ParseIP("192.168.0.1")
+	if gateway == nil {
+		fmt.Println("Invalid gateway IP")
+		return
+	}
+	route := &netlink.Route{
+		Dst:      nil,
+		Gw:       tunGateway,
+		Priority: gateway.Priority - 1,
+	}
+
+	if err := netlink.RouteAdd(route); err != nil {
+		fmt.Printf("Failed to add default route: %v\n", err)
+		return
+	}
+	routes := []*netlink.Route{
+		route,
+	}
+
+	for key, ips := range proxyIps {
+		fmt.Printf("%s:\n", key)
+		for _, ip := range ips {
+			fmt.Println("  ", ip)
+			route := addRoute(ip, gateway.Gw)
+			if route != nil {
+				routes = append(routes, route)
+			}
+		}
+	}
+	defer func() {
+		for _, route := range routes {
+			if err := netlink.RouteDel(route); err != nil {
+				//fmt.Printf("Failed to delete route for %s: %v\n", err)
+			}
+		}
+	}()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
+}
+
+func setIp() {
+	// 找到 utun15 接口
+	iface, err := netlink.LinkByName("utun15")
+	if err != nil {
+		fmt.Println("Error getting interface:", err)
+		return
+	}
+
+	if err := netlink.LinkSetUp(iface); err != nil {
+		fmt.Println("Error setting interface utun15 up:", err)
+		return
+	}
+
+	fmt.Println("Interface utun15 set up successfully")
+
+	// 解析 IP 地址和子网掩码
+	ipNet := &net.IPNet{
+		IP:   net.ParseIP("192.168.0.1"),
+		Mask: net.CIDRMask(24, 32),
+	}
+
+	// 为接口添加地址
+	err = netlink.AddrAdd(iface, &netlink.Addr{IPNet: ipNet})
+	if err != nil {
+		fmt.Println("Error adding address:", err)
+		return
+	}
+
+	fmt.Println("Address added successfully")
 }
 
 func process() {
